@@ -11,6 +11,37 @@ use clap::{Arg, Command};
 use std::collections::HashMap;
 
 /*
+ * Import serde for serialization - converting Rust data structures to/from JSON
+ * This allows us to save commands to a file and read them back
+ */
+use serde::{Deserialize, Serialize};
+
+/*
+ * Import file system operations and error handling
+ * std::fs for file operations, std::io for input/output operations
+ */
+use std::fs::OpenOptions;
+use std::io::{BufRead, BufReader, Write};
+
+/*
+ * Define a Command enum that represents all possible operations
+ * This will be serialized to JSON and stored in our log file
+ * 
+ * ENUM: A type that can be one of several variants. Like a union in C
+ * but much safer - Rust ensures you handle all possible cases.
+ * 
+ * DERIVE: Automatically implement traits (like interfaces) for our type
+ * - Serialize/Deserialize: Convert to/from JSON
+ * - Debug: Allow printing with {:?}
+ * - Clone: Allow making copies
+ */
+#[derive(Serialize, Deserialize, Debug, Clone)]
+enum Command {
+    Set { key: String, value: String },
+    Delete { key: String },
+}
+
+/*
  * Define our main data structure - a struct that holds our key-value store
  * In Rust, structs are like classes in other languages but without methods by default
  */
@@ -21,6 +52,12 @@ struct KeyValueStore {
      * String is Rust's owned string type (as opposed to &str which is a string slice)
      */
     data: HashMap<String, String>,
+    
+    /*
+     * Path to our log file where we'll store all commands
+     * This enables persistence across program restarts
+     */
+    log_path: String,
 }
 
 /*
@@ -29,39 +66,147 @@ struct KeyValueStore {
  */
 impl KeyValueStore {
     /*
-     * Constructor function - creates a new empty KeyValueStore
+     * Constructor function - creates a new KeyValueStore and loads from log file
      * 'Self' is shorthand for KeyValueStore
      * The -> Self means this function returns an instance of KeyValueStore
+     * 
+     * RESULT: Rust's error handling type. Either Ok(value) or Err(error)
+     * This forces us to handle potential errors explicitly.
      */
-    fn new() -> Self {
-        KeyValueStore {
-            /* HashMap::new() creates an empty HashMap */
+    fn new(log_path: String) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut store = KeyValueStore {
             data: HashMap::new(),
+            log_path: log_path.clone(),
+        };
+        
+        /*
+         * Try to load existing commands from the log file
+         * If the file doesn't exist, that's okay - we'll create it later
+         */
+        store.load_from_log()?;
+        
+        Ok(store)
+    }
+    
+    /*
+     * Load and replay all commands from the log file
+     * This rebuilds our in-memory state from the persistent log
+     */
+    fn load_from_log(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        /*
+         * Try to open the log file for reading
+         * If it doesn't exist, just return Ok - we'll create it when needed
+         */
+        let file = match std::fs::File::open(&self.log_path) {
+            Ok(file) => file,
+            Err(_) => return Ok(()), /* File doesn't exist yet, that's fine */
+        };
+        
+        /*
+         * BufReader reads the file line by line efficiently
+         * Much better than reading the entire file into memory at once
+         */
+        let reader = BufReader::new(file);
+        
+        /*
+         * Read each line and deserialize it back into a Command
+         * Then apply that command to rebuild our state
+         */
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue; /* Skip empty lines */
+            }
+            
+            /*
+             * Parse the JSON line back into a Command
+             * serde_json::from_str converts JSON string to our Command enum
+             */
+            let command: Command = serde_json::from_str(&line)?;
+            
+            /* Apply the command to our in-memory data */
+            self.apply_command(&command);
         }
+        
+        Ok(())
+    }
+    
+    /*
+     * Apply a command to our in-memory data structure
+     * This is used both for new commands and when replaying the log
+     */
+    fn apply_command(&mut self, command: &Command) {
+        match command {
+            Command::Set { key, value } => {
+                self.data.insert(key.clone(), value.clone());
+            }
+            Command::Delete { key } => {
+                self.data.remove(key);
+            }
+        }
+    }
+    
+    /*
+     * Write a command to the log file
+     * This ensures every operation is persisted
+     */
+    fn write_to_log(&self, command: &Command) -> Result<(), Box<dyn std::error::Error>> {
+        /*
+         * Open the log file in append mode
+         * create(true) means create the file if it doesn't exist
+         * append(true) means write to the end of the file
+         */
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)?;
+        
+        /*
+         * Convert the command to JSON and write it to the file
+         * Each command gets its own line in the file
+         */
+        let json = serde_json::to_string(command)?;
+        writeln!(file, "{}", json)?;
+        
+        /*
+         * Flush ensures the data is actually written to disk immediately
+         * This is important for durability - we don't want to lose data
+         */
+        file.flush()?;
+        
+        Ok(())
     }
 
     /*
      * Method to set a key-value pair
-     * &mut self means this method can modify the struct (mutable reference)
+     * Now this method also persists the command to the log file
      * 
-     * MUTABLE: In Rust, variables are immutable by default. To change them,
-     * you need to explicitly mark them as 'mut' (mutable). This prevents
-     * accidental modifications and makes code safer.
-     * 
-     * String parameters mean we take ownership of the strings passed in
+     * RESULT: We return Result to handle potential I/O errors
      */
-    fn set(&mut self, key: String, value: String) {
+    fn set(&mut self, key: String, value: String) -> Result<(), Box<dyn std::error::Error>> {
         /*
-         * .clone() creates a copy of the String - needed because we use key/value multiple times
-         * In Rust, values can only have one owner, so we clone to avoid ownership issues
-         * OWNERSHIP: Rust's way of managing memory without garbage collection.
-         * Each value has exactly one owner, and when the owner goes out of scope,
-         * the value is automatically cleaned up.
+         * Create a command representing this operation
          */
-        self.data.insert(key.clone(), value.clone());
+        let command = Command::Set {
+            key: key.clone(),
+            value: value.clone(),
+        };
+        
+        /*
+         * Write the command to the log file first (Write-Ahead Log pattern)
+         * This ensures we don't lose the operation even if the program crashes
+         */
+        self.write_to_log(&command)?;
+        
+        /*
+         * Apply the command to our in-memory data
+         */
+        self.apply_command(&command);
         
         /* Print confirmation to the user */
         println!("Set: {} = {}", key, value);
+        
+        Ok(())
     }
 
     /*
@@ -99,27 +244,36 @@ impl KeyValueStore {
 
     /*
      * Method to delete a key-value pair
-     * Returns bool to indicate success/failure
+     * Now this method also persists the command to the log file
      */
-    fn delete(&mut self, key: &str) -> bool {
+    fn delete(&mut self, key: &str) -> Result<bool, Box<dyn std::error::Error>> {
         /*
-         * .remove() removes the key and returns the old value (if it existed)
+         * Check if the key exists before trying to delete it
+         * We only want to log successful deletions
          */
-        match self.data.remove(key) {
-            /* If something was removed, we got Some(old_value) */
-            Some(_) => {
-                /*
-                 * The underscore _ means we don't care about the actual value that was removed
-                 * This is Rust's way of saying "I know there's a value here but I don't need it"
-                 */
-                println!("Deleted: {}", key);
-                true
-            }
-            /* If nothing was removed, the key didn't exist */
-            None => {
-                println!("Key '{}' not found", key);
-                false
-            }
+        if self.data.contains_key(key) {
+            /*
+             * Create a command representing this operation
+             */
+            let command = Command::Delete {
+                key: key.to_string(),
+            };
+            
+            /*
+             * Write the command to the log file first
+             */
+            self.write_to_log(&command)?;
+            
+            /*
+             * Apply the command to our in-memory data
+             */
+            self.apply_command(&command);
+            
+            println!("Deleted: {}", key);
+            Ok(true)
+        } else {
+            println!("Key '{}' not found", key);
+            Ok(false)
         }
     }
 }
@@ -130,11 +284,19 @@ impl KeyValueStore {
 fn main() {
     /*
      * Create a new mutable instance of our key-value store
-     * 'mut' keyword makes it mutable so we can call methods that modify it
-     * MUTABLE: Remember, Rust variables are immutable by default for safety.
-     * We need 'mut' to allow modifications.
+     * Now we pass the log file path and handle potential errors
+     * 
+     * ERROR HANDLING: The ? operator is Rust's way of early return on error
+     * If KeyValueStore::new() returns an Err, the ? will return that error
+     * from our main function immediately
      */
-    let mut store = KeyValueStore::new();
+    let mut store = match KeyValueStore::new("rusky.log".to_string()) {
+        Ok(store) => store,
+        Err(e) => {
+            eprintln!("Error initializing store: {}", e);
+            return;
+        }
+    };
 
     /*
      * Build the CLI using clap
@@ -191,10 +353,11 @@ fn main() {
             
             /*
              * Call our set method (need to clone because set takes ownership)
-             * CLONE: Creates a deep copy of the data. Necessary here because
-             * our set method takes ownership of the strings.
+             * Now we also need to handle potential I/O errors
              */
-            store.set(key.clone(), value.clone());
+            if let Err(e) = store.set(key.clone(), value.clone()) {
+                eprintln!("Error setting value: {}", e);
+            }
         }
         
         /* If "get" subcommand was used */
@@ -211,7 +374,9 @@ fn main() {
         /* If "delete" subcommand was used */
         Some(("delete", sub_matches)) => {
             let key = sub_matches.get_one::<String>("key").unwrap();
-            store.delete(key);
+            if let Err(e) = store.delete(key) {
+                eprintln!("Error deleting key: {}", e);
+            }
         }
         
         /*
