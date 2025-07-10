@@ -330,6 +330,20 @@ fn main() {
                 .arg(Arg::new("key").required(true).help("The key")),
         )
         
+        /* Define the "server" subcommand */
+        .subcommand(
+            ClapCommand::new("server")
+                .about("Run as HTTP server")
+                .arg(
+                    Arg::new("port")
+                        .short('p')
+                        .long("port")
+                        .value_name("PORT")
+                        .help("Port to listen on")
+                        .default_value("3000")
+                ),
+        )
+        
         /* Parse the command line arguments */
         .get_matches();
 
@@ -380,16 +394,164 @@ fn main() {
             }
         }
         
+        /* If "server" subcommand was used */
+        Some(("server", sub_matches)) => {
+            let port = sub_matches.get_one::<String>("port").unwrap();
+            
+            /*
+             * Run the HTTP server instead of CLI mode
+             * We need to wrap our store in Arc<Mutex<>> for thread safety
+             * 
+             * ARC: Atomic Reference Counter - allows multiple owners of data
+             * MUTEX: Mutual Exclusion - ensures only one thread accesses data at a time
+             * This combination provides thread-safe shared state for our web server
+             */
+            let shared_store = Arc::new(Mutex::new(store));
+            
+            if let Err(e) = run_server(shared_store, port).await {
+                eprintln!("Server error: {}", e);
+            }
+        }
+        
         /*
          * If no subcommand or unknown subcommand was used
          * The _ is a catch-all pattern that matches anything not already matched
          */
         _ => {
             /* Print usage instructions */
-            println!("Usage: rusky <set|get|delete> [args]");
+            println!("Usage: rusky <set|get|delete|server> [args]");
             println!("  set <key> <value>    Set a key-value pair");
             println!("  get <key>            Get a value by key");
             println!("  delete <key>         Delete a key-value pair");
+            println!("  server [-p PORT]     Run as HTTP server (default port 3000)");
         }
+    }
+}
+
+/*
+ * HTTP server implementation using axum web framework
+ * This function sets up routes and starts the server
+ */
+async fn run_server(
+    store: Arc<Mutex<KeyValueStore>>,
+    port: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    /*
+     * Define our HTTP routes using axum's Router
+     * Each route maps to a handler function
+     */
+    let app = Router::new()
+        /* POST /:key with JSON body { "value": "some_value" } */
+        .route("/:key", post(set_handler))
+        /* GET /:key returns JSON { "value": "some_value" } or 404 */
+        .route("/:key", get(get_handler))
+        /* DELETE /:key returns 200 or 404 */
+        .route("/:key", delete(delete_handler))
+        /* Share our store state with all handlers */
+        .with_state(store);
+
+    /*
+     * Create a TCP listener on the specified port
+     */
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = TcpListener::bind(&addr).await?;
+    
+    println!("🚀 Rusky server running on http://{}", addr);
+    println!("API endpoints:");
+    println!("  POST /:key     - Set key-value pair");
+    println!("  GET /:key      - Get value by key");
+    println!("  DELETE /:key   - Delete key-value pair");
+    
+    /*
+     * Start the server - this will run forever until interrupted
+     */
+    axum::serve(listener, app).await?;
+    
+    Ok(())
+}
+
+/*
+ * HTTP handler for setting key-value pairs
+ * POST /:key with JSON body { "value": "some_value" }
+ */
+async fn set_handler(
+    Path(key): Path<String>,
+    State(store): State<Arc<Mutex<KeyValueStore>>>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
+    /*
+     * Extract the value from the JSON payload
+     */
+    let value = match payload.get("value").and_then(|v| v.as_str()) {
+        Some(v) => v.to_string(),
+        None => return Err(StatusCode::BAD_REQUEST),
+    };
+    
+    /*
+     * Lock the store and perform the operation
+     * The lock automatically releases when the variable goes out of scope
+     */
+    let mut store = store.lock().unwrap();
+    
+    match store.set(key.clone(), value.clone()) {
+        Ok(_) => {
+            let response = serde_json::json!({
+                "status": "success",
+                "message": format!("Set {} = {}", key, value)
+            });
+            Ok((StatusCode::OK, Json(response)))
+        }
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+/*
+ * HTTP handler for getting values by key
+ * GET /:key returns JSON { "value": "some_value" } or 404
+ */
+async fn get_handler(
+    Path(key): Path<String>,
+    State(store): State<Arc<Mutex<KeyValueStore>>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    /*
+     * Lock the store and perform the operation
+     */
+    let store = store.lock().unwrap();
+    
+    match store.get(&key) {
+        Some(value) => {
+            let response = serde_json::json!({
+                "key": key,
+                "value": value
+            });
+            Ok(Json(response))
+        }
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+/*
+ * HTTP handler for deleting key-value pairs
+ * DELETE /:key returns 200 or 404
+ */
+async fn delete_handler(
+    Path(key): Path<String>,
+    State(store): State<Arc<Mutex<KeyValueStore>>>,
+) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
+    /*
+     * Lock the store and perform the operation
+     */
+    let mut store = store.lock().unwrap();
+    
+    match store.delete(&key) {
+        Ok(true) => {
+            let response = serde_json::json!({
+                "status": "success",
+                "message": format!("Deleted {}", key)
+            });
+            Ok((StatusCode::OK, Json(response)))
+        }
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
