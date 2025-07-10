@@ -1,8 +1,9 @@
 /*
  * Import the clap crate for command-line argument parsing
  * clap makes it easy to build CLI applications with subcommands and arguments
+ * We rename Command to ClapCommand to avoid conflict with our own Command enum
  */
-use clap::{Arg, Command};
+use clap::{Arg, Command as ClapCommand};
 
 /*
  * Import HashMap from the standard library
@@ -300,15 +301,15 @@ fn main() {
 
     /*
      * Build the CLI using clap
-     * Command::new() creates a new CLI application
+     * ClapCommand::new() creates a new CLI application
      */
-    let matches = Command::new("Rusky")
+    let matches = ClapCommand::new("Rusky")
         .version("1.0")
         .about("A Rust Key-Value Store")
         
         /* Define the "set" subcommand */
         .subcommand(
-            Command::new("set")
+            ClapCommand::new("set")
                 .about("Set a key-value pair")
                 /* Add required arguments - key and value */
                 .arg(Arg::new("key").required(true).help("The key"))
@@ -317,14 +318,14 @@ fn main() {
         
         /* Define the "get" subcommand */
         .subcommand(
-            Command::new("get")
+            ClapCommand::new("get")
                 .about("Get a value by key")
                 .arg(Arg::new("key").required(true).help("The key")),
         )
         
         /* Define the "delete" subcommand */
         .subcommand(
-            Command::new("delete")
+            ClapCommand::new("delete")
                 .about("Delete a key-value pair")
                 .arg(Arg::new("key").required(true).help("The key")),
         )
