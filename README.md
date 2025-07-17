@@ -8,6 +8,8 @@ This project was designed to explore how real databases work under the hood, sta
 
 The implementation deliberately uses a single file to keep the entire system comprehensible, allowing readers to understand the complete data flow from command parsing to persistent storage to network responses. Comments are deliberaty verbose and unconventional, as an in-line tutorial for users new to Rust (basically just me at this point).
 
+After that, I decided to also use this project to learn about Kubernetes, deployed on GCP. This is planned for the short-term future.
+
 ## Architecture Evolution
 
 We split this simple programme into three main phases, which was generally around one phase per commit. 
