@@ -100,6 +100,6 @@ Everything lives in a single file to keep it simple and readable. The rusky.log 
 
 ## Educational Value
 
-Rusky is designed as both a working key-value store and a learning tool. The code prioritizes clarity over performance, with detailed comments explaining each step. It's a good starting point for understanding how databases work or for building more advanced storage systems.
+Rusky is designed as both a working key-value store and a learning tool. The code prioritizes clarity over performance, with detailed comments explaining each step. It's a good starting point for understanding how databases work or for building more advanced storage systems. Attempts have already been made to deploy this with minikube, however, a more comprehensive hands-on approach involving deploying a Kubernetes cluster on GCP is planned for the near future to further learn about these specific tools and cloud providers. Please keep an eye on this space.
 
 The project shows how persistence, concurrency, and network programming work together in a real system, using Rust's safety features to prevent common bugs along the way.
