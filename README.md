@@ -1,4 +1,4 @@
-# Rusky
+# Rusky 🗝️
 
 Rusky is a key-value store implementation in Rust that serves as both a functional database and a learning project. The implementation progresses through three distinct stages, each building upon the previous to demonstrate fundamental database and systems programming concepts.
 
@@ -10,7 +10,7 @@ The implementation deliberately uses a single file to keep the entire system com
 
 After that, I decided to also use this project to learn about Kubernetes, deployed on GCP. This is planned for the short-term future.
 
-## Architecture Evolution
+## History and Evolution
 
 We split this simple programme into three main phases, which was generally around one phase per commit. 
 
@@ -35,6 +35,10 @@ The third stage adds a REST API server alongside the existing command-line inter
 The server uses tokio for async execution and axum for HTTP handling. Thread safety is achieved through Arc<Mutex<>> wrapping, which provides exclusive access to the shared store across concurrent HTTP requests.
 
 This architecture demonstrates how different interfaces can be built on top of the same storage engine, a common pattern in database systems where SQL, NoSQL, and other interfaces might share underlying storage infrastructure.
+
+### Kubernetes and GCP deployment
+
+This is planned for the near future. The current question would be: what would be a really good and useful way to actually make use of Kubernetes in a non-trivial way for this project? Some ideas are in progress for this section, but until then, that question should suffice.
 
 ## Key Design Decisions
 
